@@ -1,11 +1,11 @@
 {{-- Componente para mostrar resultados de búsqueda ICD-11 --}}
-@if(isset($results) && count($results) > 0)
+@if(isset($results) && is_array($results) && count($results) > 0)
     <div class="search-results-container">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h3><i class="fas fa-list"></i> Resultados de la búsqueda</h3>
             <span class="badge bg-primary">{{ count($results) }} resultados</span>
         </div>
-        
+
         <div id="search-results" class="list-group">
             @foreach($results as $item)
             <a href="{{ route('icd11.entity', ['entityId' => $item['id'] ?? '']) }}" class="list-group-item list-group-item-action">
@@ -20,7 +20,7 @@
                 @else
                     <p class="mb-1 text-muted">Sin descripción disponible</p>
                 @endif
-                
+
                 @if(isset($item['chapter']) && !empty($item['chapter']))
                     <small class="text-muted">
                         <i class="fas fa-book"></i> Capítulo: {{ $item['chapter'] }}
@@ -29,13 +29,13 @@
             </a>
             @endforeach
         </div>
-        
+
         <div class="mt-3 text-center">
             <p class="text-muted">Haga clic en un resultado para ver más detalles</p>
         </div>
     </div>
-@else
+@elseif(isset($query) && !empty($query))
     <div class="alert alert-warning">
-        <i class="fas fa-exclamation-triangle"></i> No se encontraron resultados para la búsqueda "{{ $query ?? '' }}".
+        <i class="fas fa-exclamation-triangle"></i> No se encontraron resultados para la búsqueda "<strong>{{ $query }}</strong>".
     </div>
 @endif

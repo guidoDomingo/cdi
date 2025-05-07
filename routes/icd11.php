@@ -19,6 +19,7 @@ Route::prefix('icd11')->group(function () {
     Route::get('/search', [Icd11Controller::class, 'search'])->name('icd11.search');
     Route::get('/entity/{entityId}', [Icd11Controller::class, 'getEntity'])->name('icd11.entity');
     Route::get('/entity/{entityId}/children', [Icd11Controller::class, 'getChildren'])->name('icd11.children');
+    Route::get('/embedded-tool', [Icd11Controller::class, 'embeddedTool'])->name('icd11.embedded-tool');
 });
 
 // Rutas para la API
@@ -26,4 +27,5 @@ Route::prefix('api/icd11')->group(function () {
     Route::get('/search', [Icd11Controller::class, 'search']);
     Route::get('/entity/{entityId}', [Icd11Controller::class, 'getEntity']);
     Route::get('/entity/{entityId}/children', [Icd11Controller::class, 'getChildren']);
+    Route::get('/get-token', [Icd11Controller::class, 'getApiToken']);
 });

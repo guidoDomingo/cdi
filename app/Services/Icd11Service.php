@@ -16,7 +16,7 @@ class Icd11Service
     protected $clientSecret;
     protected $token;
     protected $tokenExpiration;
-    
+
     /**
      * Constructor del servicio ICD-11
      */
@@ -24,7 +24,7 @@ class Icd11Service
     {
         $this->clientId = config('services.icd11.client_id');
         $this->clientSecret = config('services.icd11.client_secret');
-        
+
         // Intentar obtener el token desde la caché
         if (Cache::has('icd11_token')) {
             $tokenData = Cache::get('icd11_token');
@@ -32,7 +32,7 @@ class Icd11Service
             $this->tokenExpiration = $tokenData['expiration'];
         }
     }
-    
+
     /**
      * Obtiene un token de autenticación
      *
@@ -49,7 +49,7 @@ class Icd11Service
             if (empty($this->clientId) || empty($this->clientSecret)) {
                 throw new \Exception('Las credenciales de ICD-11 no están configuradas correctamente');
             }
-            
+
             // Obtener un nuevo token
             $response = Http::withBasicAuth($this->clientId, $this->clientSecret)
                 ->withHeaders([
@@ -61,37 +61,37 @@ class Icd11Service
                     'grant_type' => 'client_credentials',
                     'scope' => 'icdapi_access'
                 ]);
-                
+
             if ($response->successful()) {
                 $data = $response->json();
-                
+
                 if (!isset($data['access_token'])) {
                     throw new \Exception('Respuesta de autenticación inválida');
                 }
-                
+
                 $this->token = $data['access_token'];
                 $this->tokenExpiration = now()->addSeconds($data['expires_in'] ?? 3600);
-                
+
                 // Guardar el token en caché
                 Cache::put('icd11_token', [
                     'token' => $this->token,
                     'expiration' => $this->tokenExpiration
                 ], $this->tokenExpiration);
-                
+
                 return $this->token;
             }
-            
+
             throw new \Exception('Error en la respuesta del servidor: ' . $response->status() . ' - ' . $response->body());
         } catch (\Exception $e) {
             // Limpiar token y caché en caso de error
             $this->token = null;
             $this->tokenExpiration = null;
             Cache::forget('icd11_token');
-            
+
             throw new \Exception('Error al obtener el token de autenticación: ' . $e->getMessage());
         }
     }
-    
+
     /**
      * Realiza una solicitud a la API de ICD-11
      *
@@ -104,7 +104,7 @@ class Icd11Service
     {
         try {
             $token = $this->getToken();
-            
+
             $response = Http::withToken($token)
                 ->withHeaders([
                     'Accept' => 'application/json',
@@ -112,27 +112,27 @@ class Icd11Service
                     'Accept-Language' => 'es',
                     'API-Version' => 'v2'
                 ]);
-                
+
             // Construir la URL base
             $url = rtrim($this->apiBaseUrl, '/');
-            
+
             // Añadir el endpoint
             if (!empty($endpoint)) {
                 $url .= '/' . ltrim($endpoint, '/');
             }
-            
+
             // Añadir parámetros comunes
             $params['releaseId'] = $this->releaseId;
             $params['linearization'] = $this->linearization;
             $params['language'] = 'es';
-            
+
             // Registrar la URL para depuración
             \Log::debug('ICD-11 API Request', [
                 'url' => $url,
                 'method' => $method,
                 'params' => $params
             ]);
-            
+
             if ($method === 'GET') {
                 $response = $response->get($url, $params);
             } elseif ($method === 'POST') {
@@ -142,7 +142,7 @@ class Icd11Service
             } elseif ($method === 'DELETE') {
                 $response = $response->delete($url, $params);
             }
-            
+
             if ($response->successful()) {
                 $data = $response->json();
                 if (empty($data)) {
@@ -150,14 +150,14 @@ class Icd11Service
                 }
                 return $data;
             }
-            
+
             $errorMessage = 'Error en la solicitud a ICD-11: ';
             if ($response->status() === 404) {
                 $errorMessage .= 'El recurso solicitado no fue encontrado. URL: ' . $url;
             } else {
                 $errorMessage .= 'Código de estado: ' . $response->status() . ', Respuesta: ' . $response->body();
             }
-            
+
             throw new \Exception($errorMessage);
         } catch (\Exception $e) {
             \Log::error('Error en la solicitud a ICD-11', [
@@ -168,7 +168,7 @@ class Icd11Service
             throw $e;
         }
     }
-    
+
     /**
      * Busca entidades en ICD-11
      *
@@ -180,41 +180,34 @@ class Icd11Service
     {
         try {
             $token = $this->getToken();
-            
+
             // Configurar los parámetros de búsqueda
             $searchParams = [
                 'q' => $query,
                 'useFlexisearch' => $params['useFlexisearch'] ?? false,
                 'flatResults' => $params['flatResults'] ?? true,
-                'highlightingEnabled' => $params['highlightingEnabled'] ?? true,
-                'releaseId' => $this->releaseId,
-                'linearization' => $this->linearization,
-                'language' => 'es'
+                'highlightingEnabled' => $params['highlightingEnabled'] ?? true
             ];
-            
+
             // Añadir parámetros adicionales si existen
             if (isset($params['chapterFilter'])) {
                 $searchParams['chapterFilter'] = $params['chapterFilter'];
             }
-            
+
             if (isset($params['subtreeFilter'])) {
                 $searchParams['subtreeFilter'] = $params['subtreeFilter'];
             }
-            
-            // Construir la URL de búsqueda correcta para la API ICD-11 v2
-            // Según la documentación oficial, debemos usar la URL correcta para la API
-            $releaseId = !empty($this->releaseId) ? $this->releaseId : 'release/11/2024';
-            $linearization = !empty($this->linearization) ? $this->linearization : 'mms';
-            
-            // Construir la URL base para la búsqueda
-            $url = "https://id.who.int/icd/{$releaseId}/{$linearization}/search";
-            
+
+            // Construir la URL correcta para la API ICD-11
+            // Según la documentación, la URL debe incluir el release y linearization como parte del path
+            $url = "https://id.who.int/icd/release/11/2022-02/mms/search";
+
             // Registrar la URL para depuración
             \Log::debug('ICD-11 Search API Request', [
                 'url' => $url,
                 'params' => $searchParams
             ]);
-            
+
             $response = Http::withToken($token)
                 ->withHeaders([
                     'Accept' => 'application/json',
@@ -223,7 +216,7 @@ class Icd11Service
                     'API-Version' => 'v2'
                 ])
                 ->get($url, $searchParams);
-            
+
             if ($response->successful()) {
                 $data = $response->json();
                 if (empty($data)) {
@@ -231,14 +224,14 @@ class Icd11Service
                 }
                 return $data;
             }
-            
+
             $errorMessage = 'Error en la búsqueda ICD-11: ';
             if ($response->status() === 404) {
                 $errorMessage .= 'El recurso solicitado no fue encontrado. URL: ' . $url;
             } else {
                 $errorMessage .= 'Código de estado: ' . $response->status() . ', Respuesta: ' . $response->body();
             }
-            
+
             throw new \Exception($errorMessage);
         } catch (\Exception $e) {
             \Log::error('Error en la búsqueda ICD-11', [
@@ -249,7 +242,7 @@ class Icd11Service
             throw $e;
         }
     }
-    
+
     /**
      * Obtiene una entidad por su ID
      *
@@ -260,7 +253,7 @@ class Icd11Service
     {
         return $this->request($entityId);
     }
-    
+
     /**
      * Obtiene los hijos de una entidad
      *
@@ -271,7 +264,7 @@ class Icd11Service
     {
         return $this->request($entityId . '/children');
     }
-    
+
     /**
      * Obtiene los padres de una entidad
      *
@@ -282,7 +275,7 @@ class Icd11Service
     {
         return $this->request($entityId . '/parents');
     }
-    
+
     /**
      * Obtiene los ancestros de una entidad para construir la navegación jerárquica
      *
@@ -296,12 +289,12 @@ class Icd11Service
         if (Cache::has($cacheKey)) {
             return Cache::get($cacheKey);
         }
-        
+
         $ancestors = [];
         try {
             // Obtener los padres directos de la entidad
             $parents = $this->getParents($entityId);
-            
+
             // Si hay padres, procesarlos y obtener sus ancestros recursivamente
             if (!empty($parents)) {
                 foreach ($parents as $parent) {
@@ -311,7 +304,7 @@ class Icd11Service
                         'title' => $parent['title'] ?? 'Sin título',
                         'code' => $parent['code'] ?? ''
                     ];
-                    
+
                     // Obtener los ancestros del padre actual (limitado a evitar recursión infinita)
                     // Solo obtenemos un nivel más para evitar llamadas API excesivas
                     try {
@@ -328,13 +321,13 @@ class Icd11Service
                     }
                 }
             }
-            
+
             // Invertir el array para que los ancestros estén en orden jerárquico (de arriba hacia abajo)
             $ancestors = array_reverse($ancestors);
-            
+
             // Guardar en caché para futuras consultas (1 hora)
             Cache::put($cacheKey, $ancestors, now()->addHours(1));
-            
+
             return $ancestors;
         } catch (\Exception $e) {
             // Si hay un error, devolver un array vacío
