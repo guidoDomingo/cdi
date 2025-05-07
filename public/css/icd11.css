@@ -1,0 +1,148 @@
+/* Estilos específicos para la interfaz ICD-11 */
+
+/* Estilos generales */
+.icd11-container {
+    margin-bottom: 30px;
+}
+
+/* Estilos para la barra de búsqueda */
+.search-container {
+    background-color: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 25px;
+    border: 1px solid #e9ecef;
+}
+
+.search-container h3 {
+    color: #0d6efd;
+    font-size: 1.4rem;
+    margin-bottom: 15px;
+}
+
+/* Estilos para los resultados de búsqueda */
+#results-container {
+    margin-top: 20px;
+}
+
+#search-results .list-group-item {
+    transition: all 0.3s ease;
+    border-left: 4px solid transparent;
+}
+
+#search-results .list-group-item:hover {
+    background-color: #f1f8ff;
+    border-left: 4px solid #0d6efd;
+}
+
+#search-results .list-group-item small {
+    background-color: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+/* Estilos para los detalles de entidad */
+#entity-details .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#entity-details h4 {
+    margin-bottom: 0;
+}
+
+.entity-code {
+    background-color: rgba(255, 255, 255, 0.2);
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.entity-section {
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.entity-section:last-child {
+    border-bottom: none;
+}
+
+/* Estilos para la jerarquía y navegación */
+.hierarchy-container {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+
+.breadcrumb-navigation {
+    background-color: #e9ecef;
+    padding: 10px 15px;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}
+
+.breadcrumb-navigation a {
+    color: #0d6efd;
+    text-decoration: none;
+}
+
+.breadcrumb-navigation a:hover {
+    text-decoration: underline;
+}
+
+.breadcrumb-separator {
+    margin: 0 8px;
+    color: #6c757d;
+}
+
+/* Estilos para las subcategorías */
+.children-list {
+    margin-top: 15px;
+}
+
+.children-list .list-group-item {
+    padding: 10px 15px;
+    transition: all 0.2s ease;
+}
+
+.children-list .list-group-item:hover {
+    background-color: #f1f8ff;
+}
+
+.children-list .entity-code {
+    background-color: #e9ecef;
+    color: #495057;
+}
+
+/* Estilos para información adicional */
+.additional-info {
+    background-color: #e9ecef;
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+
+.additional-info h5 {
+    color: #495057;
+    margin-bottom: 15px;
+}
+
+/* Estilos responsivos */
+@media (max-width: 768px) {
+    .card-header h2 {
+        font-size: 1.5rem;
+    }
+    
+    #entity-details .card-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    #entity-details .card-header small {
+        margin-top: 5px;
+    }
+}
