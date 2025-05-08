@@ -198,11 +198,10 @@ class Icd11Service
                 $searchParams['subtreeFilter'] = $params['subtreeFilter'];
             }
 
-            // Construir la URL correcta para la API ICD-11
-            // Según la documentación, la URL debe incluir el release y linearization como parte del path
-            $url = "https://id.who.int/icd/release/11/2022-02/mms/search";
+            // Construir la URL correcta para la API ICD-11 usando las propiedades de la clase
+            $url = "https://id.who.int/icd/{$this->releaseId}/{$this->linearization}/search";
 
-            // Registrar la URL para depuración
+            // Log para depuración
             \Log::debug('ICD-11 Search API Request', [
                 'url' => $url,
                 'params' => $searchParams
@@ -241,6 +240,139 @@ class Icd11Service
             ]);
             throw $e;
         }
+    }
+
+    /**
+     * Busca una entidad específicamente por su código
+     *
+     * @param string $code Código ICD-11 (por ejemplo, MD12)
+     * @return array|null Información de la entidad o null si no se encuentra
+     */
+    public function findByCode($code)
+    {
+        try {
+            // Primero intentamos buscar desde la caché para mejorar rendimiento
+            $cacheKey = 'icd11_code_' . $code;
+            if (Cache::has($cacheKey)) {
+                return Cache::get($cacheKey);
+            }
+
+            \Log::debug('Buscando código ICD-11', ['code' => $code]);
+
+            // Intento 1: Búsqueda directa por código exacto
+            try {
+                $results = $this->search($code, [
+                    'flatResults' => true,
+                    'useFlexisearch' => false,
+                ]);
+
+                // Revisar los resultados para una coincidencia exacta
+                $entity = $this->extractEntityFromSearchResults($results, $code);
+                if ($entity) {
+                    Cache::put($cacheKey, $entity, now()->addHours(24));
+                    return $entity;
+                }
+            } catch (\Exception $e) {
+                \Log::warning('Error en la primera búsqueda por código', [
+                    'code' => $code,
+                    'error' => $e->getMessage()
+                ]);
+            }
+
+            // Intento 2: Intentar buscar en diferentes secciones si está disponible
+            try {
+                // Intentar con búsqueda flexible
+                $results = $this->search($code, [
+                    'flatResults' => true,
+                    'useFlexisearch' => true,
+                ]);
+
+                // Revisar los resultados para una coincidencia parcial
+                $entity = $this->extractEntityFromSearchResults($results, $code);
+                if ($entity) {
+                    Cache::put($cacheKey, $entity, now()->addHours(24));
+                    return $entity;
+                }
+            } catch (\Exception $e) {
+                \Log::warning('Error en la segunda búsqueda por código', [
+                    'code' => $code,
+                    'error' => $e->getMessage()
+                ]);
+            }
+
+            // Intento 3: Intentar buscar directamente por URL del código si la API lo soporta
+            try {
+                $codeEntity = $this->request("code/$code");
+                if ($codeEntity && !empty($codeEntity)) {
+                    $entity = [
+                        'code' => $code,
+                        'title' => $codeEntity['title'] ?? 'Sin título',
+                        'uri' => $codeEntity['uri'] ?? null,
+                        'foundationUri' => $codeEntity['foundationUri'] ?? null,
+                        'fullySpecifiedName' => $codeEntity['fullySpecifiedName'] ?? ($codeEntity['title'] ?? 'Sin título'),
+                    ];
+                    Cache::put($cacheKey, $entity, now()->addHours(24));
+                    return $entity;
+                }
+            } catch (\Exception $e) {
+                \Log::warning('Error en la tercera búsqueda por código', [
+                    'code' => $code,
+                    'error' => $e->getMessage()
+                ]);
+            }
+
+            // Si llegamos aquí, no se encontró la entidad
+            return null;
+        } catch (\Exception $e) {
+            \Log::error('Error al buscar entidad por código', [
+                'error' => $e->getMessage(),
+                'code' => $code
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Extrae una entidad de los resultados de búsqueda
+     *
+     * @param array $results Resultados de la búsqueda
+     * @param string $code Código a buscar
+     * @return array|null Entidad encontrada o null
+     */
+    private function extractEntityFromSearchResults($results, $code)
+    {
+        // Posibles estructuras de resultados según la versión de la API
+        $searchPaths = [
+            'destinationEntities',
+            'matches',
+            'entities',
+            'linearizationEntities'
+        ];
+
+        foreach ($searchPaths as $path) {
+            if (!empty($results[$path])) {
+                foreach ($results[$path] as $item) {
+                    // Comprobar coincidencia exacta
+                    if (isset($item['code']) && strtolower($item['code']) === strtolower($code)) {
+                        \Log::debug('Encontrada coincidencia exacta de código', [
+                            'code' => $code,
+                            'item' => $item
+                        ]);
+
+                        return [
+                            'code' => $item['code'],
+                            'title' => $item['title'],
+                            'uri' => $item['uri'] ?? null,
+                            'foundationUri' => $item['foundationUri'] ?? null,
+                            'fullySpecifiedName' => $item['fullySpecifiedName'] ?? $item['title'],
+                        ];
+                    }
+                }
+            }
+        }
+
+        \Log::debug('No se encontró coincidencia para el código', ['code' => $code]);
+        return null;
     }
 
     /**

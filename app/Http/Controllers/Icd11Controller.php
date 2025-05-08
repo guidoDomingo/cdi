@@ -31,60 +31,98 @@ class Icd11Controller extends Controller
      */
     public function search(Request $request)
     {
-        $query = $request->input('query');
-        $format = $request->input('format', 'html');
-        $results = [];
-
-        if (empty($query)) {
-            if ($format === 'json') {
-                return response()->json(['success' => false, 'message' => 'Se requiere un término de búsqueda']);
-            }
-            return view('icd11.index');
-        }
-
         try {
-            // Configurar parámetros de búsqueda
-            $searchParams = [
-                'useFlexisearch' => $request->input('useFlexisearch', false),
-                'flatResults' => $request->input('flatResults', true),
-                'highlightingEnabled' => $request->input('highlightingEnabled', true)
-            ];
+            $query = $request->get('query');
 
-            // Añadir filtros opcionales si están presentes
-            if ($request->has('chapterFilter')) {
-                $searchParams['chapterFilter'] = $request->input('chapterFilter');
+            if (empty($query)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'El término de búsqueda es requerido',
+                    'data' => []
+                ], 400);
             }
 
-            if ($request->has('subtreeFilter')) {
-                $searchParams['subtreeFilter'] = $request->input('subtreeFilter');
-            }
+            // Realizar la búsqueda
+            $results = $this->icd11Service->search($query);
 
-            $apiResponse = $this->icd11Service->search($query, $searchParams);
-
-            // Procesar la respuesta de la API para extraer los resultados en el formato esperado
-            $processedResults = [];
-
-            // Verificar si hay entidades en 'destinationEntities'
-            if (isset($apiResponse['destinationEntities']) && is_array($apiResponse['destinationEntities'])) {
-                $processedResults = $apiResponse['destinationEntities'];
-            }
-            // Si no hay resultados pero la API contestó sin error
-            else if (isset($apiResponse['error']) && $apiResponse['error'] === false) {
-                // La API respondió correctamente pero no encontró resultados
-                $processedResults = [];
-            }
-
-            if ($format === 'json') {
-                return response()->json(['success' => true, 'data' => $apiResponse, 'processedResults' => $processedResults]);
-            }
-
-            return view('icd11.index', ['results' => $processedResults, 'query' => $query]);
+            return response()->json([
+                'success' => true,
+                'data' => $results
+            ]);
         } catch (\Exception $e) {
-            if ($format === 'json') {
-                return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al realizar la búsqueda: ' . $e->getMessage(),
+                'data' => []
+            ], 500);
+        }
+    }
+
+    /**
+     * Obtiene información de un código ICD-11 específico
+     */
+    public function getByCode(Request $request, $code)
+    {
+        try {
+            if (empty($code)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'El código ICD-11 es requerido',
+                    'data' => null
+                ], 400);
             }
 
-            return view('icd11.index', ['error' => $e->getMessage()]);
+            // Buscar entidad por código
+            $entity = $this->icd11Service->findByCode($code);
+
+            if (!$entity) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No se encontró información para el código ICD-11 proporcionado',
+                    'data' => null
+                ], 404);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $entity
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener información del código: ' . $e->getMessage(),
+                'data' => null
+            ], 500);
+        }
+    }
+
+    /**
+     * Obtiene detalles completos de una entidad ICD-11
+     */
+    public function getEntityDetails($id)
+    {
+        try {
+            if (empty($id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'El ID de la entidad es requerido',
+                    'data' => null
+                ], 400);
+            }
+
+            // Obtener la entidad
+            $entity = $this->icd11Service->getEntity($id);
+
+            return response()->json([
+                'success' => true,
+                'data' => $entity
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener detalles de la entidad: ' . $e->getMessage(),
+                'data' => null
+            ], 500);
         }
     }
 
