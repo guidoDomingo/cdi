@@ -50,7 +50,10 @@
                             <a class="nav-link" href="{{ route('icd11.index') }}">ICD-11 Consulta</a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" href="{{ route('icd11.embedded-tool') }}">ICD-11 ECT</a>
+                            <a class="nav-link" href="{{ route('icd11.embedded-tool') }}">ICD-11 Navegador</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ route('icd11.coding-tool') }}">ICD-11 Codificación</a>
                         </li>
                     </ul>
                 </div>

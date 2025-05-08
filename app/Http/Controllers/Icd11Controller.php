@@ -182,6 +182,14 @@ class Icd11Controller extends Controller
     }
 
     /**
+     * Muestra la página con la herramienta de codificación ICD-11
+     */
+    public function codingTool()
+    {
+        return view('icd11.coding-tool');
+    }
+
+    /**
      * Obtiene el token de autenticación para la API de ICD-11
      *
      * @return \Illuminate\Http\JsonResponse

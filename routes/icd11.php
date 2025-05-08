@@ -20,6 +20,7 @@ Route::prefix('icd11')->group(function () {
     Route::get('/entity/{entityId}', [Icd11Controller::class, 'getEntity'])->name('icd11.entity');
     Route::get('/entity/{entityId}/children', [Icd11Controller::class, 'getChildren'])->name('icd11.children');
     Route::get('/embedded-tool', [Icd11Controller::class, 'embeddedTool'])->name('icd11.embedded-tool');
+    Route::get('/coding-tool', [Icd11Controller::class, 'codingTool'])->name('icd11.coding-tool');
 });
 
 // Rutas para la API
