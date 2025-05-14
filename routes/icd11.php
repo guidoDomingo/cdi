@@ -21,6 +21,8 @@ if (request()->is('api*')) {
         Route::get('/entity/{entityId}/children', [Icd11Controller::class, 'getChildren']);
         Route::get('/get-token', [Icd11Controller::class, 'getApiToken']);
         Route::get('/code/{code}', [Icd11Controller::class, 'getByCode']);
+        Route::get('/disease/{code}', [Icd11Controller::class, 'getDetailedDiseaseByCode']);
+        Route::post('/entity-by-uri', [Icd11Controller::class, 'getEntityByUri']);
     });
 } else {
     // Rutas para la interfaz web (cuando se cargan desde web.php)
@@ -31,5 +33,8 @@ if (request()->is('api*')) {
         Route::get('/entity/{entityId}/children', [Icd11Controller::class, 'getChildren'])->name('icd11.children');
         Route::get('/embedded-tool', [Icd11Controller::class, 'embeddedTool'])->name('icd11.embedded-tool');
         Route::get('/coding-tool', [Icd11Controller::class, 'codingTool'])->name('icd11.coding-tool');
+        Route::get('/disease/{code}', [Icd11Controller::class, 'getDetailedDiseaseByCode'])->name('icd11.disease');
+        Route::get('/disease-tester', [Icd11Controller::class, 'diseaseTester'])->name('icd11.disease-tester');
+        Route::get('/api-docs', [Icd11Controller::class, 'apiDocs'])->name('icd11.api-docs');
     });
 }

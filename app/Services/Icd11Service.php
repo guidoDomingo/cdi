@@ -466,4 +466,305 @@ class Icd11Service
             return [];
         }
     }
+
+    /**
+     * Obtiene detalles de una entidad usando sus URIs
+     *
+     * @param array $data Datos de la entidad incluyendo URIs
+     * @return array|null Información completa de la entidad o null si no se encuentra
+     */
+    public function getEntityByUri($data)
+    {
+        try {
+            // Verificar que tengamos al menos una URI para consultar
+            if (empty($data['uri']) && empty($data['foundationUri']) && empty($data['linearizationUri'])) {
+                throw new \Exception('Se requiere al menos una URI para obtener detalles de la entidad');
+            }
+
+            \Log::debug('Obteniendo detalles de entidad por URI', ['data' => $data]);
+
+            // Definir una clave para caché única basada en URI disponibles
+            $cacheKey = 'icd11_uri_' . md5(json_encode($data));
+            if (Cache::has($cacheKey)) {
+                return Cache::get($cacheKey);
+            }
+
+            // Intentar obtener por URI principal si está disponible
+            $entityDetails = null;
+
+            if (!empty($data['uri'])) {
+                try {
+                    // Extraer el ID de entidad de la URI
+                    $parts = explode('/', $data['uri']);
+                    $entityId = end($parts);
+
+                    if (!empty($entityId)) {
+                        $entityDetails = $this->getEntity($entityId);
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener entidad por URI principal', [
+                        'uri' => $data['uri'],
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            // Si no tenemos detalles todavía, intentar con la URI de foundation
+            if (!$entityDetails && !empty($data['foundationUri'])) {
+                try {
+                    // Hacer una solicitud directa a la URI
+                    $token = $this->getToken();
+
+                    $response = Http::withToken($token)
+                        ->withHeaders([
+                            'Accept' => 'application/json',
+                            'Content-Type' => 'application/json',
+                            'Accept-Language' => 'es',
+                            'API-Version' => $this->apiVersion
+                        ])
+                        ->get($data['foundationUri'], [
+                            'releaseId' => $this->releaseId,
+                            'language' => 'es'
+                        ]);
+
+                    if ($response->successful()) {
+                        $entityDetails = $response->json();
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener entidad por foundationUri', [
+                        'foundationUri' => $data['foundationUri'],
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            // Si todavía no tenemos detalles, intentar con linearizationUri
+            if (!$entityDetails && !empty($data['linearizationUri'])) {
+                try {
+                    // Hacer una solicitud directa a la URI
+                    $token = $this->getToken();
+
+                    $response = Http::withToken($token)
+                        ->withHeaders([
+                            'Accept' => 'application/json',
+                            'Content-Type' => 'application/json',
+                            'Accept-Language' => 'es',
+                            'API-Version' => $this->apiVersion
+                        ])
+                        ->get($data['linearizationUri'], [
+                            'releaseId' => $this->releaseId,
+                            'language' => 'es'
+                        ]);
+
+                    if ($response->successful()) {
+                        $entityDetails = $response->json();
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener entidad por linearizationUri', [
+                        'linearizationUri' => $data['linearizationUri'],
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            // Si no tenemos detalles pero tenemos código, intentar buscar por código
+            if (!$entityDetails && !empty($data['code'])) {
+                try {
+                    $entityDetails = $this->findByCode($data['code']);
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener entidad por código como fallback', [
+                        'code' => $data['code'],
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            if ($entityDetails) {
+                // Combinar los detalles obtenidos con los datos proporcionados
+                $result = array_merge(
+                    is_array($entityDetails) ? $entityDetails : ['title' => $entityDetails],
+                    [
+                        'code' => $data['code'] ?? ($entityDetails['code'] ?? null),
+                        'uri' => $data['uri'] ?? ($entityDetails['uri'] ?? null),
+                        'foundationUri' => $data['foundationUri'] ?? ($entityDetails['foundationUri'] ?? null),
+                        'linearizationUri' => $data['linearizationUri'] ?? ($entityDetails['linearizationUri'] ?? null)
+                    ]
+                );
+
+                // Guardar en caché
+                Cache::put($cacheKey, $result, now()->addHours(24));
+
+                return $result;
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            \Log::error('Error al obtener detalles de entidad por URI', [
+                'error' => $e->getMessage(),
+                'data' => $data
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Obtiene información detallada de una enfermedad directamente de la API oficial de la OMS por su código
+     *
+     * @param string $code Código ICD-11 (por ejemplo, MD12)
+     * @return array Información detallada de la enfermedad
+     * @throws \Exception si hay un error al obtener los datos
+     */
+    public function getDetailedDiseaseByCode($code)
+    {
+        try {
+            // Verificar que el código no esté vacío
+            if (empty($code)) {
+                throw new \Exception('El código ICD-11 es requerido');
+            }
+
+            // Clave de caché para evitar solicitudes repetidas
+            $cacheKey = 'icd11_detailed_' . $code;
+
+            // Intentar recuperar de la caché primero
+            if (Cache::has($cacheKey)) {
+                return Cache::get($cacheKey);
+            }
+
+            // Obtener token de autenticación
+            $token = $this->getToken();
+
+            // URL específica para la API oficial de la OMS para buscar por código
+            $url = 'https://id.who.int/icd/release/11/2022-02/mms/codeinfo/' . urlencode($code);
+
+            \Log::debug('Consultando API OMS para código detallado', [
+                'url' => $url,
+                'code' => $code
+            ]);
+
+            // Realizar la solicitud a la API de la OMS
+            $response = Http::withToken($token)
+                ->withHeaders([
+                    'Accept' => 'application/json',
+                    'Content-Type' => 'application/json',
+                    'Accept-Language' => 'es',
+                    'API-Version' => 'v2'
+                ])
+                ->get($url);
+
+            if ($response->successful()) {
+                $data = $response->json();
+
+                // Si no hay datos, intentar con un endpoint alternativo
+                if (empty($data) || (isset($data['error']) && $data['error'])) {
+                    // URL alternativa - intentar obtener por el endpoint de entidad directamente
+                    $altUrl = 'https://id.who.int/icd/entity/' . urlencode($code);
+
+                    $altResponse = Http::withToken($token)
+                        ->withHeaders([
+                            'Accept' => 'application/json',
+                            'Content-Type' => 'application/json',
+                            'Accept-Language' => 'es',
+                            'API-Version' => 'v2'
+                        ])
+                        ->get($altUrl);
+
+                    if ($altResponse->successful()) {
+                        $data = $altResponse->json();
+                    }
+                }
+
+                if (empty($data)) {
+                    throw new \Exception('No se encontraron datos para el código ' . $code);
+                }
+
+                // Intentar obtener información adicional, como la descripción
+                $extendedInfo = $this->getExtendedInformation($data);
+                if ($extendedInfo) {
+                    $data = array_merge($data, $extendedInfo);
+                }
+
+                // Guardar en caché para futuras consultas
+                Cache::put($cacheKey, $data, now()->addHours(24));
+
+                return $data;
+            }
+
+            $errorMessage = 'Error en la API de la OMS: ';
+            if ($response->status() === 404) {
+                $errorMessage .= 'Código no encontrado: ' . $code;
+            } else {
+                $errorMessage .= 'Código de estado: ' . $response->status() . ', Respuesta: ' . $response->body();
+            }
+
+            throw new \Exception($errorMessage);
+
+        } catch (\Exception $e) {
+            \Log::error('Error al obtener información detallada por código', [
+                'error' => $e->getMessage(),
+                'code' => $code
+            ]);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Obtiene información extendida (descripción, términos relacionados, etc.) para una entidad
+     *
+     * @param array $entityData Los datos básicos de la entidad
+     * @return array Información extendida
+     */
+    protected function getExtendedInformation($entityData)
+    {
+        try {
+            $result = [];
+
+            // Si tenemos un URI, intentar obtener información adicional
+            if (isset($entityData['uri']) || isset($entityData['foundationUri'])) {
+                $uri = $entityData['uri'] ?? $entityData['foundationUri'];
+
+                // Extraer el ID de la entidad del URI
+                $entityId = null;
+                if (preg_match('#/([^/]+)$#', $uri, $matches)) {
+                    $entityId = $matches[1];
+                }
+
+                if ($entityId) {
+                    // Intentar obtener la entidad completa por su ID
+                    $entityDetails = $this->getEntity($entityId);
+
+                    if ($entityDetails) {
+                        // Extraer campos importantes
+                        if (isset($entityDetails['definition']) && !isset($entityData['definition'])) {
+                            $result['definition'] = $entityDetails['definition'];
+                        }
+
+                        if (isset($entityDetails['longDefinition']) && !isset($entityData['longDefinition'])) {
+                            $result['longDefinition'] = $entityDetails['longDefinition'];
+                        }
+
+                        if (isset($entityDetails['description']) && !isset($entityData['description'])) {
+                            $result['description'] = $entityDetails['description'];
+                        }
+
+                        if (isset($entityDetails['inclusion']) && !isset($entityData['inclusion'])) {
+                            $result['inclusion'] = $entityDetails['inclusion'];
+                        }
+
+                        if (isset($entityDetails['exclusion']) && !isset($entityData['exclusion'])) {
+                            $result['exclusion'] = $entityDetails['exclusion'];
+                        }
+                    }
+                }
+            }
+
+            return $result;
+        } catch (\Exception $e) {
+            \Log::warning('Error al obtener información extendida', [
+                'error' => $e->getMessage()
+            ]);
+
+            return [];
+        }
+    }
 }

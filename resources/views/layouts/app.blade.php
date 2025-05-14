@@ -55,6 +55,12 @@
                         <li class="nav-item">
                             <a class="nav-link" href="{{ route('icd11.coding-tool') }}">ICD-11 Codificación</a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ route('icd11.disease-tester') }}">ICD-11 API Tester</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ route('icd11.api-docs') }}"><i class="fas fa-book"></i> Documentación API</a>
+                        </li>
                     </ul>
                 </div>
             </div>
