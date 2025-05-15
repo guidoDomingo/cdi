@@ -65,14 +65,14 @@
 
                         <div class="card mb-3 border-primary">
                             <div class="card-header bg-primary text-white">
-                                <h4 class="mb-0">Detalles de enfermedad por código (Nuevo)</h4>
+                                <h4 class="mb-0">Detalles de enfermedad por código (Mejorado)</h4>
                             </div>
                             <div class="card-body">
                                 <div class="endpoint">
                                     <span class="badge bg-success">GET</span>
                                     <code>/api/icd11/disease/{code}</code>
                                 </div>
-                                <p>Obtiene información detallada de una enfermedad directamente desde la API oficial de la OMS utilizando su código ICD-11.</p>
+                                <p>Obtiene información detallada y completa de una enfermedad directamente desde la API oficial de la OMS utilizando su código ICD-11. Incluye descripciones completas, términos relacionados, exclusiones y más información detallada.</p>
                                 <div class="params">
                                     <h5>Parámetros:</h5>
                                     <ul>
@@ -81,7 +81,14 @@
                                 </div>
                                 <div class="response">
                                     <h5>Respuesta:</h5>
-                                    <p>Datos detallados sobre la enfermedad, incluyendo título, descripción, términos relacionados y otros metadatos.</p>
+                                    <p>Datos detallados sobre la enfermedad, incluyendo:</p>
+                                    <ul>
+                                        <li><strong>Información básica:</strong> Código y título</li>
+                                        <li><strong>Descripción completa:</strong> Descripción clínica detallada</li>
+                                        <li><strong>Términos relacionados (inclusion):</strong> Lista de términos y condiciones relacionadas</li>
+                                        <li><strong>Exclusiones:</strong> Condiciones que deben ser excluidas</li>
+                                        <li><strong>URIs y metadatos:</strong> Enlaces a fuentes oficiales de datos</li>
+                                    </ul>
                                 </div>
                                 <div class="mt-3">
                                     <a href="{{ route('icd11.disease-tester') }}" class="btn btn-primary">

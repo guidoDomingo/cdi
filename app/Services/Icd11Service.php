@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
+use App\Services\Icd11EnhancedBrowserService;
 
 class Icd11Service
 {
@@ -18,12 +19,20 @@ class Icd11Service
     protected $tokenExpiration;
 
     /**
+     * Servicio mejorado para búsqueda en navegador
+     */
+    protected $browserService;
+
+    /**
      * Constructor del servicio ICD-11
      */
-    public function __construct()
+    public function __construct(Icd11EnhancedBrowserService $browserService = null)
     {
         $this->clientId = config('services.icd11.client_id');
         $this->clientSecret = config('services.icd11.client_secret');
+
+        // Inicializar el servicio de navegador mejorado
+        $this->browserService = $browserService ?? new Icd11EnhancedBrowserService();
 
         // Intentar obtener el token desde la caché
         if (Cache::has('icd11_token')) {
@@ -633,70 +642,676 @@ class Icd11Service
             // Obtener token de autenticación
             $token = $this->getToken();
 
-            // URL específica para la API oficial de la OMS para buscar por código
-            $url = 'https://id.who.int/icd/release/11/2022-02/mms/codeinfo/' . urlencode($code);
+            // Inicializar el resultado con información básica
+            $result = [
+                'code' => $code,
+                'title' => '',  // Se llenará posteriormente
+            ];
 
-            \Log::debug('Consultando API OMS para código detallado', [
-                'url' => $url,
-                'code' => $code
-            ]);
+            $entityUri = null;
+            $foundationUri = null;
 
-            // Realizar la solicitud a la API de la OMS
-            $response = Http::withToken($token)
-                ->withHeaders([
-                    'Accept' => 'application/json',
-                    'Content-Type' => 'application/json',
-                    'Accept-Language' => 'es',
-                    'API-Version' => 'v2'
-                ])
-                ->get($url);
+            // Intentar obtener la entidad directamente por código primero - sin depender de findByCode
+            try {
+                // Construir la URL para obtener información por código directamente
+                $directCodeUrl = "https://id.who.int/icd/entity/search?q={$code}";
 
-            if ($response->successful()) {
-                $data = $response->json();
+                $directResponse = Http::withToken($token)
+                    ->withHeaders([
+                        'Accept' => 'application/json',
+                        'Content-Type' => 'application/json',
+                        'Accept-Language' => 'es',
+                        'API-Version' => 'v2'
+                    ])
+                    ->get($directCodeUrl);
 
-                // Si no hay datos, intentar con un endpoint alternativo
-                if (empty($data) || (isset($data['error']) && $data['error'])) {
-                    // URL alternativa - intentar obtener por el endpoint de entidad directamente
-                    $altUrl = 'https://id.who.int/icd/entity/' . urlencode($code);
+                if ($directResponse->successful()) {
+                    $data = $directResponse->json();
 
-                    $altResponse = Http::withToken($token)
+                    // Buscar la entidad en cualquier estructura de respuesta posible
+                    $entityFound = false;
+                    $searchPaths = ['destinationEntities', 'matches', 'entities', 'linearizationEntities'];
+
+                    foreach ($searchPaths as $path) {
+                        if (!empty($data[$path])) {
+                            foreach ($data[$path] as $item) {
+                                // Buscar coincidencia exacta o parcial
+                                if (isset($item['code']) && (strtolower($item['code']) === strtolower($code) ||
+                                    strpos(strtolower($item['code']), strtolower($code)) === 0)) {
+
+                                    // Obtener datos básicos
+                                    $result = [
+                                        'code' => $item['code'] ?? $code,
+                                        'title' => $item['title'] ?? 'Sin título',
+                                        'uri' => $item['uri'] ?? null,
+                                        'foundationUri' => $item['foundationUri'] ?? null,
+                                        'linearizationUri' => $item['linearizationUri'] ?? null,
+                                        'fullySpecifiedName' => $item['fullySpecifiedName'] ?? ($item['title'] ?? 'Sin título'),
+                                    ];
+
+                                    // Guardar las URIs si están disponibles
+                                    if (!empty($item['uri'])) $entityUri = $item['uri'];
+                                    if (!empty($item['foundationUri'])) $foundationUri = $item['foundationUri'];
+
+                                    $entityFound = true;
+                                    break 2; // Salir de ambos bucles
+                                }
+                            }
+                        }
+                    }
+
+                    if (!$entityFound) {
+                        // Intentar buscar directamente sin estructura
+                        if (!empty($data['code']) && (strtolower($data['code']) === strtolower($code) ||
+                            strpos(strtolower($data['code']), strtolower($code)) === 0)) {
+
+                            $result = [
+                                'code' => $data['code'] ?? $code,
+                                'title' => $data['title'] ?? 'Sin título',
+                                'uri' => $data['uri'] ?? null,
+                                'foundationUri' => $data['foundationUri'] ?? null,
+                                'linearizationUri' => $data['linearizationUri'] ?? null,
+                                'fullySpecifiedName' => $data['fullySpecifiedName'] ?? ($data['title'] ?? 'Sin título'),
+                            ];
+
+                            // Guardar las URIs
+                            if (!empty($data['uri'])) $entityUri = $data['uri'];
+                            if (!empty($data['foundationUri'])) $foundationUri = $data['foundationUri'];
+                        }
+                    }
+                }
+            } catch (\Exception $e) {
+                \Log::info('Búsqueda directa por código falló, continuando con otros métodos', [
+                    'code' => $code,
+                    'error' => $e->getMessage()
+                ]);
+                // No lanzar excepción, simplemente continuar con otros métodos
+            }
+
+            // Probar múltiples versiones de la API para garantizar compatibilidad
+            $apiVersions = [
+                'https://id.who.int/icd/release/11/2024/mms/codeinfo/' . urlencode($code),
+                'https://id.who.int/icd/release/11/2022-02/mms/codeinfo/' . urlencode($code),
+                'https://id.who.int/icd/entity/' . urlencode($code)
+            ];
+
+            $response = null;
+            $responseData = null;
+
+            foreach ($apiVersions as $url) {
+                \Log::debug('Consultando API OMS para código detallado', [
+                    'url' => $url,
+                    'code' => $code
+                ]);
+
+                try {
+                    // Realizar la solicitud a la API de la OMS
+                    $response = Http::withToken($token)
                         ->withHeaders([
                             'Accept' => 'application/json',
                             'Content-Type' => 'application/json',
                             'Accept-Language' => 'es',
                             'API-Version' => 'v2'
                         ])
-                        ->get($altUrl);
+                        ->get($url);
 
-                    if ($altResponse->successful()) {
-                        $data = $altResponse->json();
+                    if ($response->successful()) {
+                        $data = $response->json();
+                        if (!empty($data) && (!isset($data['error']) || !$data['error'])) {
+                            $responseData = $data;
+                            break; // Salir del bucle si obtenemos datos válidos
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::info('Falló el intento con URL: ' . $url, [
+                        'error' => $e->getMessage()
+                    ]);
+                    // Continuar con el siguiente URL
+                }
+            }            // Usar los datos de la respuesta si los obtuvimos
+            if ($responseData) {
+                $result = array_merge($result, $responseData);
+
+                // Si tenemos un stemId, usarlo para obtener información detallada
+                if (!empty($responseData['stemId'])) {
+                    try {
+                        \Log::info('Intentando obtener detalles usando stemId', ['stemId' => $responseData['stemId']]);
+
+                        // Extraer el ID numérico del stemId
+                        if (preg_match('#/(\d+)$#', $responseData['stemId'], $matches)) {
+                            $stemNumericId = $matches[1];
+
+                            // Construir URL para el endpoint /entity/
+                            $stemUrl = "https://id.who.int/icd/entity/{$stemNumericId}";
+
+                            $stemResponse = Http::withToken($token)
+                                ->withHeaders([
+                                    'Accept' => 'application/json',
+                                    'Content-Type' => 'application/json',
+                                    'Accept-Language' => 'es',
+                                    'API-Version' => 'v2'
+                                ])
+                                ->get($stemUrl);
+
+                            if ($stemResponse->successful()) {
+                                $stemData = $stemResponse->json();
+
+                                if (!empty($stemData)) {
+                                    // Extraer título y otros datos importantes
+                                    if (!empty($stemData['title']) && (empty($result['title']) || $result['title'] === '')) {
+                                        $result['title'] = $stemData['title'];
+                                    }
+
+                                    // Añadir otros datos útiles del stemId
+                                    foreach (['definition', 'description', 'longDefinition', 'fullySpecifiedName', 'inclusion', 'exclusion'] as $field) {
+                                        if (!empty($stemData[$field]) && empty($result[$field])) {
+                                            $result[$field] = $stemData[$field];
+                                        }
+                                    }
+
+                                    // Guardar URIs si están disponibles
+                                    if (!empty($stemData['uri']) && empty($entityUri)) {
+                                        $entityUri = $stemData['uri'];
+                                    }
+                                    if (!empty($stemData['foundationUri']) && empty($foundationUri)) {
+                                        $foundationUri = $stemData['foundationUri'];
+                                    }
+                                }
+                            }
+                        }
+                    } catch (\Exception $e) {
+                        \Log::info('Error al obtener datos usando stemId: ' . $e->getMessage());
+                    }
+                }
+            }
+
+            // Si aún no tenemos título, intentar buscarlo en otras fuentes
+            if (empty($result['title']) || $result['title'] === '') {
+                // Intentemos obtener al menos el título directamente desde la API de búsqueda
+                try {
+                    // Probar con ambas versiones de la API de búsqueda
+                    $searchUrls = [
+                        "https://id.who.int/icd/{$this->releaseId}/{$this->linearization}/search",
+                        "https://id.who.int/icd/release/11/2022-02/mms/search",
+                        "https://icd.who.int/ct11/icd11_mms/en/search"
+                    ];
+
+                    $foundTitle = false;
+                    foreach ($searchUrls as $searchUrl) {
+                        $searchResponse = Http::withToken($token)
+                            ->withHeaders([
+                                'Accept' => 'application/json',
+                                'Content-Type' => 'application/json',
+                                'Accept-Language' => 'es',
+                                'API-Version' => 'v2'
+                            ])
+                            ->get($searchUrl, [
+                                'q' => $code,
+                                'useFlexisearch' => true,
+                                'flatResults' => true
+                            ]);
+
+                        if ($searchResponse->successful()) {
+                            $searchData = $searchResponse->json();
+
+                            // Buscar el título en los resultados de búsqueda
+                            foreach (['destinationEntities', 'matches', 'entities', 'linearizationEntities'] as $path) {
+                                if (!empty($searchData[$path])) {
+                                    foreach ($searchData[$path] as $item) {
+                                        if (isset($item['code']) && strtolower($item['code']) === strtolower($code)) {
+                                            if (!empty($item['title'])) {
+                                                $result['title'] = $item['title'];
+                                            }
+                                            if (!empty($item['uri']) && empty($entityUri)) {
+                                                $entityUri = $item['uri'];
+                                            }
+                                            if (!empty($item['foundationUri']) && empty($foundationUri)) {
+                                                $foundationUri = $item['foundationUri'];
+                                            }
+                                            // Si encontramos el título, podemos terminar la búsqueda
+                                            if (!empty($result['title']) && $result['title'] !== '') {
+                                                // Establecer una bandera para salir de los bucles externos
+                                                $foundTitle = true;
+                                                break 3; // Salir de los tres bucles anidados
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Si ya encontramos el título, salir del bucle de URLs
+                        if ($foundTitle) {
+                            break;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::info('Error al buscar el título: ' . $e->getMessage());
+                }
+            }
+
+            // Método adicional: buscar en la página HTML oficial de la OMS
+            if (empty($result['title']) || $result['title'] === '') {
+                try {
+                    // Consultar directamente la página de navegación de la OMS
+                    $browserUrl = "https://icd.who.int/browse11/l-m/es/http%3a%2f%2fid.who.int%2ficd%2fentity%2f{$code}";
+                    $htmlResponse = Http::get($browserUrl);
+
+                    if ($htmlResponse->successful()) {
+                        $htmlContent = $htmlResponse->body();
+
+                        // Extraer el título del HTML
+                        if (preg_match('/<h1[^>]*class="entityTitle"[^>]*>(.*?)<\/h1>/s', $htmlContent, $matches)) {
+                            $title = trim(strip_tags($matches[1]));
+                            if (!empty($title)) {
+                                $result['title'] = $title;
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::info('Error al extraer título del HTML: ' . $e->getMessage());
+                }
+            }
+
+            // Intentar obtener detalles del endpont de entidad
+            if ($entityUri) {
+                try {
+                    // Extraer el ID de entidad de la URI
+                    $parts = explode('/', $entityUri);
+                    $entityId = end($parts);
+
+                    if (!empty($entityId)) {
+                        // Intentar obtener detalles completos de la entidad
+                        $entityDetails = $this->getEntity($entityId);
+
+                        if ($entityDetails && is_array($entityDetails)) {
+                            // Fusionar con los resultados
+                            $result = array_merge($result, $entityDetails);
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener detalles adicionales de entidad', [
+                        'uri' => $entityUri,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            // Si no hay información detallada (definition, description), intentar con el endpoint de definiciones
+            if (empty($result['definition']) && $entityUri) {
+                try {
+                    // Extraer el ID de entidad de la URI
+                    $parts = explode('/', $entityUri);
+                    $entityId = end($parts);
+
+                    if (!empty($entityId)) {
+                        // Intentar obtener la definición específicamente
+                        $definitionResponse = Http::withToken($token)
+                            ->withHeaders([
+                                'Accept' => 'application/json',
+                                'Content-Type' => 'application/json',
+                                'Accept-Language' => 'es',
+                                'API-Version' => 'v2'
+                            ])
+                            ->get("https://id.who.int/icd/entity/{$entityId}/definition", [
+                                'releaseId' => $this->releaseId,
+                                'linearization' => $this->linearization,
+                                'language' => 'es'
+                            ]);
+
+                        if ($definitionResponse->successful()) {
+                            $definitionData = $definitionResponse->json();
+                            if (!empty($definitionData)) {
+                                $result['definition'] = $definitionData;
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener definición específica', [
+                        'entityId' => $entityId ?? 'unknown',
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            // Intentar obtener inclusiones específicamente si no existen
+            if (empty($result['inclusion']) && $entityUri) {
+                try {
+                    $parts = explode('/', $entityUri);
+                    $entityId = end($parts);
+
+                    if (!empty($entityId)) {
+                        $inclusionsResponse = Http::withToken($token)
+                            ->withHeaders([
+                                'Accept' => 'application/json',
+                                'Content-Type' => 'application/json',
+                                'Accept-Language' => 'es',
+                                'API-Version' => 'v2'
+                            ])
+                            ->get("https://id.who.int/icd/entity/{$entityId}/inclusion", [
+                                'releaseId' => $this->releaseId,
+                                'linearization' => $this->linearization,
+                                'language' => 'es'
+                            ]);
+
+                        if ($inclusionsResponse->successful()) {
+                            $inclusionData = $inclusionsResponse->json();
+                            if (!empty($inclusionData)) {
+                                $result['inclusion'] = $inclusionData;
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener inclusiones', [
+                        'entityId' => $entityId ?? 'unknown',
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            // Intentar obtener exclusiones específicamente si no existen
+            if (empty($result['exclusion']) && $entityUri) {
+                try {
+                    $parts = explode('/', $entityUri);
+                    $entityId = end($parts);
+
+                    if (!empty($entityId)) {
+                        $exclusionsResponse = Http::withToken($token)
+                            ->withHeaders([
+                                'Accept' => 'application/json',
+                                'Content-Type' => 'application/json',
+                                'Accept-Language' => 'es',
+                                'API-Version' => 'v2'
+                            ])
+                            ->get("https://id.who.int/icd/entity/{$entityId}/exclusion", [
+                                'releaseId' => $this->releaseId,
+                                'linearization' => $this->linearization,
+                                'language' => 'es'
+                            ]);
+
+                        if ($exclusionsResponse->successful()) {
+                            $exclusionData = $exclusionsResponse->json();
+                            if (!empty($exclusionData)) {
+                                $result['exclusion'] = $exclusionData;
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener exclusiones', [
+                        'entityId' => $entityId ?? 'unknown',
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            // Si tenemos un foundationUri y todavía no tenemos descripción ni definición
+            // intentamos obtener información desde la foundation
+            if ($foundationUri && (empty($result['description']) || empty($result['definition']) || empty($result['longDefinition']))) {
+                try {
+                    $foundationResponse = Http::withToken($token)
+                        ->withHeaders([
+                            'Accept' => 'application/json',
+                            'Content-Type' => 'application/json',
+                            'Accept-Language' => 'es',
+                            'API-Version' => 'v2'
+                        ])
+                        ->get($foundationUri, [
+                            'releaseId' => $this->releaseId,
+                            'language' => 'es'
+                        ]);
+
+                    if ($foundationResponse->successful()) {
+                        $foundationData = $foundationResponse->json();
+
+                        // Si hay datos de foundation, intentar extraer lo que nos falta
+                        if ($foundationData) {
+                            // Extraer solo aquellos campos que nos interesan y que no tenemos aún
+                            foreach (['description', 'definition', 'longDefinition', 'inclusion', 'exclusion'] as $field) {
+                                if (!empty($foundationData[$field]) && empty($result[$field])) {
+                                    $result[$field] = $foundationData[$field];
+                                }
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener datos desde foundation', [
+                        'foundationUri' => $foundationUri,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            // Procesar description si existe en algún formato (puede venir en diferentes formatos)
+            if (empty($result['description']) && !empty($result['definition'])) {
+                // Si no hay description pero sí una definición, usarla como description
+                if (is_array($result['definition']) && isset($result['definition']['content'])) {
+                    $result['description'] = $result['definition']['content'];
+                } elseif (is_string($result['definition'])) {
+                    $result['description'] = $result['definition'];
+                }
+            }
+
+            // Si aún no tenemos descripciones, buscar en todos los campos posibles
+            foreach (['longDefinition', 'browserDescription', 'fullySpecifiedName'] as $possibleField) {
+                if (empty($result['description']) && !empty($result[$possibleField])) {
+                    if (is_array($result[$possibleField]) && isset($result[$possibleField]['content'])) {
+                        $result['description'] = $result[$possibleField]['content'];
+                    } elseif (is_string($result[$possibleField])) {
+                        $result['description'] = $result[$possibleField];
+                    }
+                }
+            }
+
+            // Intentar obtener la descripción directamente desde el browser description endpoint si existe entityId
+            if (empty($result['description']) && !empty($entityId)) {
+                try {
+                    $browserDescriptionResponse = Http::withToken($token)
+                        ->withHeaders([
+                            'Accept' => 'application/json',
+                            'Content-Type' => 'application/json',
+                            'Accept-Language' => 'es',
+                            'API-Version' => 'v2'
+                        ])
+                        ->get("https://id.who.int/icd/entity/{$entityId}/browserDescription", [
+                            'releaseId' => $this->releaseId,
+                            'linearization' => $this->linearization,
+                            'language' => 'es'
+                        ]);
+
+                    if ($browserDescriptionResponse->successful()) {
+                        $browserData = $browserDescriptionResponse->json();
+                        if (!empty($browserData)) {
+                            if (is_array($browserData) && isset($browserData['content'])) {
+                                $result['description'] = $browserData['content'];
+                                $result['browserDescription'] = $browserData;
+                            } elseif (is_string($browserData)) {
+                                $result['description'] = $browserData;
+                                $result['browserDescription'] = $browserData;
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al obtener browserDescription', [
+                        'entityId' => $entityId ?? 'unknown',
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }            // Probar múltiples endpoints de Foundation Component para encontrar datos detallados
+            if (empty($result['description']) || empty($result['inclusion']) || empty($result['exclusion'])) {
+                $foundationUrls = [
+                    "https://id.who.int/icd/release/11/2024/mms/foundationComponent/{$code}",
+                    "https://id.who.int/icd/release/11/2022-02/mms/foundationComponent/{$code}",
+                    "https://id.who.int/icd/entity/foundationComponent/{$code}"
+                ];
+
+                // Si tenemos un entityUri, también construir URLs basadas en él
+                if ($entityUri) {
+                    $parts = explode('/', $entityUri);
+                    $entityId = end($parts);
+                    if ($entityId) {
+                        $foundationUrls[] = "https://id.who.int/icd/entity/{$entityId}/foundation";
+                        $foundationUrls[] = "https://id.who.int/icd/entity/foundation/{$entityId}";
                     }
                 }
 
-                if (empty($data)) {
-                    throw new \Exception('No se encontraron datos para el código ' . $code);
+                foreach ($foundationUrls as $fcUrl) {
+                    try {
+                        $fcResponse = Http::withToken($token)
+                            ->withHeaders([
+                                'Accept' => 'application/json',
+                                'Content-Type' => 'application/json',
+                                'Accept-Language' => 'es',
+                                'API-Version' => 'v2'
+                            ])
+                            ->get($fcUrl);
+
+                        if ($fcResponse->successful()) {
+                            $fcData = $fcResponse->json();
+                            if (!empty($fcData)) {
+                                // Guardar datos completos del componente foundation
+                                $result['foundationComponent'] = $fcData;
+
+                                // Buscar descripción en diferentes campos del Foundation Component
+                                foreach (['definition', 'description', 'textualDefinition', 'longDefinition', 'browserDescription'] as $descField) {
+                                    if (!empty($fcData[$descField])) {
+                                        if (is_array($fcData[$descField]) && isset($fcData[$descField]['content'])) {
+                                            $result['description'] = $fcData[$descField]['content'];
+                                        } elseif (is_string($fcData[$descField])) {
+                                            $result['description'] = $fcData[$descField];
+                                        }
+                                    }
+                                }
+
+                                // Extraer inclusiones y exclusiones si están disponibles
+                                if (!empty($fcData['inclusion'])) {
+                                    $result['inclusion'] = $fcData['inclusion'];
+                                }
+                                if (!empty($fcData['exclusion'])) {
+                                    $result['exclusion'] = $fcData['exclusion'];
+                                }
+
+                                // Si encontramos datos útiles, detenemos la búsqueda
+                                if (!empty($result['description']) &&
+                                    !empty($result['inclusion']) &&
+                                    !empty($result['exclusion'])) {
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (\Exception $e) {
+                        \Log::info('Error al obtener foundation component desde URL: ' . $fcUrl, [
+                            'error' => $e->getMessage()
+                        ]);
+                    }
                 }
+            }            // Si aún no tenemos descripción o título, intentar con el browser API que es más confiable
+            if (empty($result['description']) || empty($result['title']) || $result['title'] === '') {
+                try {
+                    // Probar múltiples variantes de URLs del navegador ICD-11
+                    $browserUrls = [
+                        "https://icd.who.int/browse11/l-m/es/GetConcept/{$code}",
+                        "https://icd.who.int/ct11/icd11_mms/en/getConcept/{$code}",
+                        "https://icd.who.int/browse11/l-m/es/http%3a%2f%2fid.who.int%2ficd%2fentity%2f{$code}"
+                    ];
 
-                // Intentar obtener información adicional, como la descripción
-                $extendedInfo = $this->getExtendedInformation($data);
-                if ($extendedInfo) {
-                    $data = array_merge($data, $extendedInfo);
+                    foreach ($browserUrls as $browserUrl) {
+                        $browserResponse = Http::get($browserUrl);
+
+                        if ($browserResponse->successful()) {
+                            $htmlContent = $browserResponse->body();
+
+                            // Intentar extraer la descripción del HTML usando expresiones regulares
+                            if (empty($result['description']) &&
+                                preg_match('/<div[^>]*class="description"[^>]*>(.*?)<\/div>/s', $htmlContent, $matches)) {
+                                $description = trim(strip_tags($matches[1]));
+                                if (!empty($description)) {
+                                    $result['description'] = $description;
+                                    $result['browserHtmlDescription'] = $matches[1];
+                                }
+                            }
+
+                            // Intentar extraer el título si aún no lo tenemos
+                            if ((empty($result['title']) || $result['title'] === '') &&
+                                preg_match('/<h1[^>]*class="entityTitle"[^>]*>(.*?)<\/h1>/s', $htmlContent, $titleMatches)) {
+                                $title = trim(strip_tags($titleMatches[1]));
+                                if (!empty($title)) {
+                                    $result['title'] = $title;
+                                }
+                            }
+
+                            // Si ya tenemos tanto título como descripción, podemos salir del bucle
+                            if (!empty($result['description']) && !empty($result['title']) && $result['title'] !== '') {
+                                break;
+                            }
+                        }
+                    }
+
+                    // Intento adicional: consultar la API alternativa de la OMS
+                    if (empty($result['description']) || empty($result['title']) || $result['title'] === '') {
+                        $alternativeUrl = "https://icd.who.int/browse11/l-m/en/JsonService/GetConcept?ConceptId={$code}";
+                        $alternativeResponse = Http::get($alternativeUrl);
+
+                        if ($alternativeResponse->successful()) {
+                            $jsonData = $alternativeResponse->json();
+
+                            if (!empty($jsonData)) {
+                                // Extraer título si existe en la respuesta alternativa
+                                if ((empty($result['title']) || $result['title'] === '') && !empty($jsonData['Title'])) {
+                                    $result['title'] = $jsonData['Title'];
+                                }
+
+                                // Extraer descripción si existe en la respuesta alternativa
+                                if (empty($result['description']) && !empty($jsonData['Definition'])) {
+                                    $result['description'] = $jsonData['Definition'];
+                                }
+
+                                // Guardar datos JSON adicionales que pueden ser útiles
+                                $result['browserJsonData'] = $jsonData;
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::info('Error al obtener datos del navegador', [
+                        'error' => $e->getMessage()
+                    ]);
                 }
-
-                // Guardar en caché para futuras consultas
-                Cache::put($cacheKey, $data, now()->addHours(24));
-
-                return $data;
             }
 
-            $errorMessage = 'Error en la API de la OMS: ';
-            if ($response->status() === 404) {
-                $errorMessage .= 'Código no encontrado: ' . $code;
-            } else {
-                $errorMessage .= 'Código de estado: ' . $response->status() . ', Respuesta: ' . $response->body();
+            // Último recurso: usar el servicio de navegador mejorado si todavía nos faltan datos
+            if (empty($result['title']) || $result['title'] === '' || empty($result['description'])) {
+                \Log::info('Utilizando servicio de navegador mejorado para código: ' . $code);
+
+                try {
+                    $browserResults = $this->browserService->fetchDiseaseInfoFromBrowser($code);
+
+                    // Aplicar los resultados del navegador solo si tienen datos
+                    if (!empty($browserResults['title']) && (empty($result['title']) || $result['title'] === '')) {
+                        $result['title'] = $browserResults['title'];
+                        $result['browser_title_source'] = true;
+                    }
+
+                    if (!empty($browserResults['description']) && empty($result['description'])) {
+                        $result['description'] = $browserResults['description'];
+                        $result['browser_description_source'] = true;
+                    }
+                } catch (\Exception $e) {
+                    \Log::warning('Error al utilizar servicio de navegador mejorado', [
+                        'error' => $e->getMessage(),
+                        'code' => $code
+                    ]);
+                }
             }
 
-            throw new \Exception($errorMessage);
+            // Si aún no tenemos un título y hemos agotado todas las opciones, poner un marcador
+            if (empty($result['title']) || $result['title'] === '') {
+                $result['title'] = "Código {$code}";
+                $result['title_not_found'] = true;
+            }
+
+            // Guardar en caché para futuras consultas
+            Cache::put($cacheKey, $result, now()->addHours(24));
+
+            return $result;
 
         } catch (\Exception $e) {
             \Log::error('Error al obtener información detallada por código', [
@@ -718,6 +1333,18 @@ class Icd11Service
     {
         try {
             $result = [];
+            $token = $this->getToken();
+
+            // Definir los campos que queremos obtener
+            $specialEndpoints = [
+                'definition',
+                'longDefinition',
+                'description',
+                'inclusion',
+                'exclusion',
+                'browserDescription',
+                'fullySpecifiedName'
+            ];
 
             // Si tenemos un URI, intentar obtener información adicional
             if (isset($entityData['uri']) || isset($entityData['foundationUri'])) {
@@ -730,31 +1357,142 @@ class Icd11Service
                 }
 
                 if ($entityId) {
-                    // Intentar obtener la entidad completa por su ID
-                    $entityDetails = $this->getEntity($entityId);
+                    // Intentar obtener la entidad completa por su ID primero
+                    try {
+                        $entityDetails = $this->getEntity($entityId);
 
-                    if ($entityDetails) {
-                        // Extraer campos importantes
-                        if (isset($entityDetails['definition']) && !isset($entityData['definition'])) {
-                            $result['definition'] = $entityDetails['definition'];
+                        if ($entityDetails) {
+                            // Extraer campos importantes
+                            foreach ($specialEndpoints as $field) {
+                                if (isset($entityDetails[$field]) && !isset($entityData[$field])) {
+                                    $result[$field] = $entityDetails[$field];
+                                }
+                            }
                         }
+                    } catch (\Exception $e) {
+                        \Log::warning('Error al obtener entidad completa en getExtendedInformation', [
+                            'entityId' => $entityId,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
 
-                        if (isset($entityDetails['longDefinition']) && !isset($entityData['longDefinition'])) {
-                            $result['longDefinition'] = $entityDetails['longDefinition'];
-                        }
+                    // Para cada campo especial, si aún no lo tenemos, intentar obtenerlo directamente
+                    foreach ($specialEndpoints as $endpoint) {
+                        if (empty($result[$endpoint]) && empty($entityData[$endpoint])) {
+                            try {
+                                $endpointUrl = "https://id.who.int/icd/entity/{$entityId}/{$endpoint}";
 
-                        if (isset($entityDetails['description']) && !isset($entityData['description'])) {
-                            $result['description'] = $entityDetails['description'];
-                        }
+                                $endpointResponse = Http::withToken($token)
+                                    ->withHeaders([
+                                        'Accept' => 'application/json',
+                                        'Content-Type' => 'application/json',
+                                        'Accept-Language' => 'es',
+                                        'API-Version' => 'v2'
+                                    ])
+                                    ->get($endpointUrl, [
+                                        'releaseId' => $this->releaseId,
+                                        'linearization' => $this->linearization,
+                                        'language' => 'es'
+                                    ]);
 
-                        if (isset($entityDetails['inclusion']) && !isset($entityData['inclusion'])) {
-                            $result['inclusion'] = $entityDetails['inclusion'];
-                        }
-
-                        if (isset($entityDetails['exclusion']) && !isset($entityData['exclusion'])) {
-                            $result['exclusion'] = $entityDetails['exclusion'];
+                                if ($endpointResponse->successful()) {
+                                    $endpointData = $endpointResponse->json();
+                                    if (!empty($endpointData)) {
+                                        $result[$endpoint] = $endpointData;
+                                    }
+                                }
+                            } catch (\Exception $e) {
+                                \Log::debug("No se pudo obtener {$endpoint} para entidad {$entityId}", [
+                                    'error' => $e->getMessage()
+                                ]);
+                                // No hacemos nada, simplemente continuamos con el siguiente endpoint
+                            }
                         }
                     }
+
+                    // Si aún no tenemos descripción, intentar obtenerla desde la linearizationUri
+                    if (empty($result['description']) && empty($entityData['description']) && !empty($entityData['linearizationUri'])) {
+                        try {
+                            $linearizationResponse = Http::withToken($token)
+                                ->withHeaders([
+                                    'Accept' => 'application/json',
+                                    'Content-Type' => 'application/json',
+                                    'Accept-Language' => 'es',
+                                    'API-Version' => 'v2'
+                                ])
+                                ->get($entityData['linearizationUri'], [
+                                    'releaseId' => $this->releaseId,
+                                    'language' => 'es'
+                                ]);
+
+                            if ($linearizationResponse->successful()) {
+                                $linearizationData = $linearizationResponse->json();
+                                foreach ($specialEndpoints as $field) {
+                                    if (!empty($linearizationData[$field])) {
+                                        $result[$field] = $linearizationData[$field];
+                                    }
+                                }
+                            }
+                        } catch (\Exception $e) {
+                            \Log::warning('Error al obtener datos desde linearizationUri', [
+                                'linearizationUri' => $entityData['linearizationUri'],
+                                'error' => $e->getMessage()
+                            ]);
+                        }
+                    }
+                }
+            }
+
+            // Si tenemos definición pero no descripción, usar definición como descripción
+            if (empty($result['description']) && !empty($result['definition'])) {
+                if (is_array($result['definition']) && isset($result['definition']['content'])) {
+                    $result['description'] = $result['definition']['content'];
+                } elseif (is_string($result['definition'])) {
+                    $result['description'] = $result['definition'];
+                }
+            }
+
+            // Si aún no hay descripción pero hay longDefinition, usarla
+            if (empty($result['description']) && !empty($result['longDefinition'])) {
+                if (is_array($result['longDefinition']) && isset($result['longDefinition']['content'])) {
+                    $result['description'] = $result['longDefinition']['content'];
+                } elseif (is_string($result['longDefinition'])) {
+                    $result['description'] = $result['longDefinition'];
+                }
+            }
+
+            // Si todavía no tenemos inclusiones pero tenemos uri, intentar con /linearization
+            if (empty($result['inclusion']) && empty($entityData['inclusion']) && !empty($entityId)) {
+                try {
+                    $linearizationUrl = "https://id.who.int/icd/entity/{$entityId}/linearization";
+
+                    $linearizationResponse = Http::withToken($token)
+                        ->withHeaders([
+                            'Accept' => 'application/json',
+                            'Content-Type' => 'application/json',
+                            'Accept-Language' => 'es',
+                            'API-Version' => 'v2'
+                        ])
+                        ->get($linearizationUrl, [
+                            'releaseId' => $this->releaseId,
+                            'linearization' => $this->linearization,
+                            'language' => 'es'
+                        ]);
+
+                    if ($linearizationResponse->successful()) {
+                        $linearizationData = $linearizationResponse->json();
+                        if (!empty($linearizationData)) {
+                            foreach ($specialEndpoints as $field) {
+                                if (!empty($linearizationData[$field]) && empty($result[$field])) {
+                                    $result[$field] = $linearizationData[$field];
+                                }
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Log::debug("No se pudo obtener información de linearization para entidad {$entityId}", [
+                        'error' => $e->getMessage()
+                    ]);
                 }
             }
 

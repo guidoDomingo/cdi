@@ -101,24 +101,63 @@ function displayResult(data) {
                 </div>
             </div>`;
 
-    // Descripción si está disponible
-    if (data.description || data.longDefinition || data.definition) {
-        const description = data.description ||
-                           (data.longDefinition ? data.longDefinition.content : null) ||
-                           (data.definition ? data.definition.content : null);
+    // Descripción si está disponible - procesamos múltiples formatos posibles
+    let description = null;
 
-        if (description) {
-            output += `<div class="mt-3">
-                <h4>Descripción:</h4>
-                <p>${description}</p>
-            </div>`;
+    // Intentar obtener descripción de diferentes campos, en orden de prioridad
+    if (data.description) {
+        if (typeof data.description === 'object' && data.description.content) {
+            description = data.description.content;
+        } else if (typeof data.description === 'string') {
+            description = data.description;
         }
+    }
+
+    if (!description && data.longDefinition) {
+        if (typeof data.longDefinition === 'object' && data.longDefinition.content) {
+            description = data.longDefinition.content;
+        } else if (typeof data.longDefinition === 'string') {
+            description = data.longDefinition;
+        }
+    }
+
+    if (!description && data.definition) {
+        if (typeof data.definition === 'object' && data.definition.content) {
+            description = data.definition.content;
+        } else if (typeof data.definition === 'string') {
+            description = data.definition;
+        }
+    }
+
+    // Si aún no hay descripción, intentar con otros campos posibles
+    if (!description && data.browserDescription) {
+        if (typeof data.browserDescription === 'object' && data.browserDescription.content) {
+            description = data.browserDescription.content;
+        } else if (typeof data.browserDescription === 'string') {
+            description = data.browserDescription;
+        }
+    }
+
+    if (!description && data.fullySpecifiedName) {
+        description = typeof data.fullySpecifiedName === 'string' ? data.fullySpecifiedName : null;
+    }
+
+    // Mostrar descripción si la tenemos
+    if (description) {
+        output += `<div class="mt-3">
+            <h4>Descripción:</h4>
+            <div class="description-content">${description}</div>
+        </div>`;
     }
 
     output += `</div></div>`;
 
-    // Términos relacionados si existen
-    if (data.inclusion && data.inclusion.length > 0) {
+    // Términos relacionados (inclusion) - manejar diferentes formatos
+    const hasInclusions = data.inclusion &&
+        (Array.isArray(data.inclusion) ||
+         (typeof data.inclusion === 'object' && Object.keys(data.inclusion).length > 0));
+
+    if (hasInclusions) {
         output += `<div class="card mb-4">
             <div class="card-header bg-info text-white">
                 <h3 class="mb-0">Términos relacionados</h3>
@@ -126,19 +165,44 @@ function displayResult(data) {
             <div class="card-body">
                 <ul class="list-group">`;
 
-        data.inclusion.forEach(term => {
-            if (term.label) {
-                output += `<li class="list-group-item">${term.label}</li>`;
+        // Manejar diferentes formatos de inclusiones
+        if (Array.isArray(data.inclusion)) {
+            data.inclusion.forEach(term => {
+                let label = null;
+                if (typeof term === 'object') {
+                    label = term.label || term.title || term.content || JSON.stringify(term);
+                } else if (typeof term === 'string') {
+                    label = term;
+                }
+
+                if (label) {
+                    output += `<li class="list-group-item">${label}</li>`;
+                }
+            });
+        } else if (typeof data.inclusion === 'object') {
+            // Si es un objeto, intentar extraer propiedades útiles
+            for (const key in data.inclusion) {
+                if (typeof data.inclusion[key] === 'string') {
+                    output += `<li class="list-group-item">${data.inclusion[key]}</li>`;
+                } else if (typeof data.inclusion[key] === 'object') {
+                    const term = data.inclusion[key];
+                    const label = term.label || term.title || term.content || JSON.stringify(term);
+                    output += `<li class="list-group-item">${label}</li>`;
+                }
             }
-        });
+        }
 
         output += `</ul>
             </div>
         </div>`;
     }
 
-    // Exclusiones si existen
-    if (data.exclusion && data.exclusion.length > 0) {
+    // Exclusiones - manejar diferentes formatos
+    const hasExclusions = data.exclusion &&
+        (Array.isArray(data.exclusion) ||
+         (typeof data.exclusion === 'object' && Object.keys(data.exclusion).length > 0));
+
+    if (hasExclusions) {
         output += `<div class="card mb-4">
             <div class="card-header bg-warning">
                 <h3 class="mb-0">Exclusiones</h3>
@@ -146,11 +210,32 @@ function displayResult(data) {
             <div class="card-body">
                 <ul class="list-group">`;
 
-        data.exclusion.forEach(term => {
-            if (term.label) {
-                output += `<li class="list-group-item">${term.label}</li>`;
+        // Manejar diferentes formatos de exclusiones
+        if (Array.isArray(data.exclusion)) {
+            data.exclusion.forEach(term => {
+                let label = null;
+                if (typeof term === 'object') {
+                    label = term.label || term.title || term.content || JSON.stringify(term);
+                } else if (typeof term === 'string') {
+                    label = term;
+                }
+
+                if (label) {
+                    output += `<li class="list-group-item">${label}</li>`;
+                }
+            });
+        } else if (typeof data.exclusion === 'object') {
+            // Si es un objeto, intentar extraer propiedades útiles
+            for (const key in data.exclusion) {
+                if (typeof data.exclusion[key] === 'string') {
+                    output += `<li class="list-group-item">${data.exclusion[key]}</li>`;
+                } else if (typeof data.exclusion[key] === 'object') {
+                    const term = data.exclusion[key];
+                    const label = term.label || term.title || term.content || JSON.stringify(term);
+                    output += `<li class="list-group-item">${label}</li>`;
+                }
             }
-        });
+        }
 
         output += `</ul>
             </div>

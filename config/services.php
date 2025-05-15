@@ -34,6 +34,9 @@ return [
     'icd11' => [
         'client_id' => env('ICD11_CLIENT_ID'),
         'client_secret' => env('ICD11_CLIENT_SECRET'),
+        'cache_duration' => env('ICD11_CACHE_DURATION', 24), // Duración de caché en horas
+        'enable_enhanced_browser' => env('ICD11_ENABLE_ENHANCED_BROWSER', true), // Habilitar servicio de navegador mejorado
+        'timeout' => env('ICD11_TIMEOUT', 10), // Timeout para peticiones en segundos
     ],
 
 ];

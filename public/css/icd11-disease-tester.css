@@ -35,3 +35,30 @@
 .card-header h3 i {
     margin-right: 8px;
 }
+
+.description-content {
+    background-color: #f9f9f9;
+    padding: 15px;
+    border-radius: 6px;
+    margin-top: 10px;
+    border-left: 4px solid #007bff;
+    white-space: pre-line;
+    line-height: 1.6;
+}
+
+.example-code.active {
+    background-color: #007bff !important;
+    color: white !important;
+}
+
+.list-group-item {
+    padding: 0.75rem 1.25rem;
+    background-color: #f9f9f9;
+    border: 1px solid #eaeaea;
+    margin-bottom: 5px;
+    border-radius: 4px;
+}
+
+.list-group {
+    margin-bottom: 0;
+}
